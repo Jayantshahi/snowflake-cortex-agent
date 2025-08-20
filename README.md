@@ -1,6 +1,8 @@
 # Build an LLM Agent in 5 minutes 
 ## Overview
 
+https://developers.snowflake.com/demos-old/data-exploration-llm-chatbot/
+
 This repository shows you how to build an LLM using Snowflake's API. 
 
 <img width="500" alt="Screenshot 2025-03-07 at 12 04 05 AM" src="https://github.com/user-attachments/assets/889a971b-2c04-4b57-a43d-a1c626b290bf" />
