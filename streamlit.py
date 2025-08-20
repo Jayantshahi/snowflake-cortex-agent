@@ -1,105 +1,103 @@
-import json
-import requests
 import streamlit as st
+import pandas as pd
+import json
 
-# These constants are project-specific or API-specific:
-AGENT_API_ENDPOINT = "/api/v2/cortex/agent:run"
-API_TIMEOUT = 50000  # in milliseconds
-CORTEX_SEARCH_SERVICES = "sales_intelligence.data.sales_conversation_search"
-SEMANTIC_MODELS = "@sales_intelligence.data.models/sales_metrics_model.yaml"
-WAREHOUSE = "SALES_INTELLIGENCE_WH"
+# Title and Sidebar
+st.set_page_config(page_title="Snowflake LLM Chatbot", layout="wide")
+st.title("💬 LLM-Powered SQL Chatbot with Cortex Search")
 
-def run_snowflake_query(query):
-    try:
-        df = session.sql(query.replace(';',''))
-        return df
-    except Exception as e:
-        st.error(f"Error executing SQL: {str(e)}")
-        return None
-
-def agent_api_call(query: str, limit: int = 10):
-    payload = {
-        "model": "llama3.1-70b",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": query}
-                ]
-            }
-        ],
-        "tools": [
-            {"tool_spec": {"type": "cortex_analyst_text_to_sql", "name": "analyst1"}},
-            {"tool_spec": {"type": "cortex_search", "name": "search1"}}
-        ],
-        "tool_resources": {
-            "analyst1": {"semantic_model_file": SEMANTIC_MODELS},
-            "search1": {
-                "name": CORTEX_SEARCH_SERVICES,
-                "max_results": limit
-            }
-        }
-    }
-    # The Snowflake access token is automatically handled in projects. 
-    # You might not need to add any Authorization/Token header!
-    try:
-        host_url = f"https://{st.query_params.account_locator}.snowflakecomputing.com"
-    except Exception:
-        host_url = ""  # fallback to blank (may need to update this depending on your API endpoint location)
-
-    try:
-        resp = requests.post(
-            url=f"{host_url}{AGENT_API_ENDPOINT}",
-            json=payload,
-            timeout=API_TIMEOUT / 1000  # Convert ms to seconds
-        )
-    except Exception as e:
-        return f"API call failed: {str(e)}"
-    if resp.status_code < 400:
-        try:
-            parsed = resp.json()
-            # Adjust extraction logic according to actual API response JSON
-            return json.dumps(parsed, indent=2)
-        except Exception as e:
-            return f"Failed to parse API response: {str(e)}"
-    else:
-        return f"Error from API: {resp.status_code} - {resp.text}"
-
-def main():
-    global session
-
-    with st.sidebar:
-        if st.button("Reset Conversation", key="new_chat"):
-            st.session_state.messages = []
-            st.rerun()
-
-    st.title("Intelligent Sales Assistant")
-
-    # Get built-in session for Snowflake Streamlit
-    try:
-        session = st.connection("snowflake")
-    except Exception as e:
-        st.error(f"Could not get session: {e}")
-        return
-
-    if 'messages' not in st.session_state:
+with st.sidebar:
+    st.markdown("## 🗂️ App Configuration")
+    st.info("You're using your Snowflake Project context and database.")
+    if st.button("Reset Conversation", key="reset"):
         st.session_state.messages = []
+        st.rerun()
 
-    for message in st.session_state.messages:
-        with st.chat_message(message['role']):
-            st.markdown(message['content'].replace("•", "\n\n-"))
+# Ensure message history is initialized
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    user_input = st.chat_input("What is your question?")
-    if user_input:
-        with st.chat_message("user"):
-            st.markdown(user_input)
-        st.session_state.messages.append({"role": "user", "content": user_input})
+def run_agent(query: str):
+    """
+    Calls the Cortex LLM agent on Snowflake via the SQL EXECUTE FUNCTION method.
+    Modify this block if you use a different invocation setup for Cortex.
+    """
 
-        with st.spinner("Processing your request..."):
-            response = agent_api_call(user_input, 1)
-        with st.chat_message("assistant"):
-            st.markdown(str(response))
-        st.session_state.messages.append({"role": "assistant", "content": str(response)})
+    # Get the active session. Adjust if needed for your environment.
+    session = st.connection("snowflake")  # provided by Snowflake Streamlit
 
-if __name__ == "__main__":
-    main()
+    # Your semantic model, cortex search, and related configs
+    SEMANTIC_MODEL = "@sales_intelligence.data.models/sales_metrics_model.yaml"
+    CORTEX_SEARCH_SERVICE = "sales_intelligence.data.sales_conversation_search"
+
+    # The function below is provided as a template; you might need to adjust for your actual Cortex LLM endpoint.
+    # We'll use a hypothetical SQL UDF called AGENT_EXECUTE, adjust if you have a different implementation.
+    # Suppose you installed Cortex agent function as: cortex_agent_fn('query')
+    try:
+        # For demonstration, replace with your actual Cortex/UDF invocation.
+        # This just runs as SQL against your database schema.
+        cortex_sql = f"SELECT cortex_complete('{query}', '{SEMANTIC_MODEL}', '{CORTEX_SEARCH_SERVICE}') AS response"
+        result = session.query(cortex_sql)
+        data = result.to_pandas()
+        # Extract text output (if JSON is returned, parse accordingly)
+        answer_raw = data['RESPONSE'][0]
+        try:
+            # Some LLMs return a stringified dict
+            answer = json.loads(answer_raw)
+        except Exception:
+            answer = answer_raw
+        return answer
+    except Exception as e:
+        return f"❌ Error from Cortex/Agent: {str(e)}"
+
+def plot_if_possible(agent_response):
+    """Tries to plot results if agent response is a valid SQL table or JSON result."""
+    # If it looks like a markdown table or JSON, try to parse it
+    if isinstance(agent_response, pd.DataFrame):
+        st.dataframe(agent_response)
+        try:
+            st.bar_chart(agent_response)
+        except Exception:
+            pass
+    elif isinstance(agent_response, dict):
+        df = pd.DataFrame(agent_response)
+        st.dataframe(df)
+        try:
+            st.bar_chart(df)
+        except Exception:
+            pass
+    elif isinstance(agent_response, str) and agent_response.startswith("[") and agent_response.endswith("]"):
+        try:
+            df = pd.DataFrame(json.loads(agent_response))
+            st.dataframe(df)
+            try:
+                st.bar_chart(df)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    # Otherwise: just print the output
+    else:
+        st.markdown(agent_response)
+
+# Display chat history
+for msg in st.session_state.messages:
+    with st.chat_message(msg['role']):
+        plot_if_possible(msg['content'])
+
+# The chat input
+user_input = st.chat_input("Type your business/SQL/analytics question and press Enter...")
+if user_input:
+    with st.chat_message("user"):
+        st.markdown(user_input)
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    with st.spinner("👩‍💻 Thinking..."):
+        # Call your agent for a response
+        agent_response = run_agent(user_input)
+
+    # Show assistant reply and possibly plot
+    with st.chat_message("assistant"):
+        plot_if_possible(agent_response)
+
+    st.session_state.messages.append({"role": "assistant", "content": agent_response})
